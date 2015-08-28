@@ -111,8 +111,10 @@ Observable = class({
 	yield = function(this)
 		local child = EventStream.new():close_from (this)
 		this:subscribe(function(event)
-			coroutine.yield()
-			child.sink(event)
+			if (coroutine.running()) then
+				coroutine.yield()
+			end
+			child:sink(event)
 		end)
 		return child
 	end,

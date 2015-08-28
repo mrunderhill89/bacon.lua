@@ -118,6 +118,16 @@ Observable = class({
 		end)
 		return child
 	end,
+	yield_after = function(this)
+		local child = EventStream.new():close_from (this)
+		this:subscribe(function(event)
+			child:sink(event)
+			if (coroutine.running()) then
+				coroutine.yield()
+			end
+		end)
+		return child
+	end,
 	log = function(this, label)
 		this:on_value(function(data) 
 			print(label..":"..data)

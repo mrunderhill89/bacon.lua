@@ -1,13 +1,14 @@
 _ = _ or require("moses")
 
-function class(proto, static)
-	local static = static or {}
-	static.proto = proto or {}
-	static.__index = static
-
-	local proto = static.proto 
+function class(params)
+	local proto = params or {}
 	proto.__index = proto
-	setmetatable(proto,static)
+
+	proto.extend = function(base, subparams)
+		local subclass = class(subparams)
+		setmetatable(subclass, base)
+		return subclass
+	end
 
 	proto.constructor = function(instance, ...)
 		local instance = instance or {}

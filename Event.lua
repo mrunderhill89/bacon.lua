@@ -41,7 +41,7 @@ Event = class({
 		return this
 	end,
 	has_message = function(this)
-		return (this:is_next() or this:is_initial()) and this._message ~= nil
+		return (this:is_next() or this:is_initial())
 	end,
 	type_to_string = type_to_string,
 	string_to_type = string_to_type

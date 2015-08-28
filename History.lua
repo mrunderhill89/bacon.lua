@@ -10,7 +10,7 @@ History = Observable:extend({
 			_.push(this.history, evn)
 		end)
 		if (not _.isNil(initial)) then
-			this.stream:sink(Event.new():event_type("initial"):message(initial))
+			this.stream:push(initial,"initial")
 		end
 	end,
 	subscribe = function(this,sub)

@@ -41,26 +41,64 @@ Observable = class({
 			end
 		end)
 	end,
-	push = function(this,value)
-		return this:sink(Event.new():message(value))
+	push = function(this,value, event_type)
+		--[[
+			Wraps a value around an event before calling sink() on it.
+		]]--
+		event_type  = event_type  or "next"
+		return this:sink(Event.new():event_type(event_type):message(value))
 	end,
-	plug_from = function(this, from)
-		return from:subscribe(function(event)
-			this:sink(event)
+	plug_from = function(this, from, ignore_final, ignore_errors)
+		--[[
+			Connects this streams' input to another's output.
+			By default, final and error events are also passed in, but
+			you can ignore them at your discretion.
+			
+			Returns a function that can be called to disconnect the two
+			streams.
+		]]--
+		if (not ignore_final) then
+			this:close_from(from)
+		end
+		if (not ignore_errors) then
+			from:on_error(function(event)
+				this:sink(event)
+			end)
+		end
+		return from:on_value(function(value)
+			this:push(value)
 		end)
 	end,
-	plug_to = function(this, to)
-		return to:plug_from(this)
+	plug_to = function(this, to, ignore_final, ignore_errors)
+		--[[
+			Inverse of plug_from(). Connects the "to" stream's input
+			to this stream's output.
+		]]--
+		return to:plug_from(this, ignore_final, ignore_errors)
 	end,
 	close_from = function(this,from)
+		--[[
+			Causes this stream to close when the "from" stream closes.
+			Useful for derived values which are no longer relevant once
+			their base values have dried up.
+		]]--
 		from:on_final(_.bind(this.close, this))
 		return this
 	end,
 	close_to = function(this,to)
+		--[[
+			Inverse of close_from(). When this stream closes, the "to"
+			stream will, also.
+		]]--
 		to:close_from(this)
 		return this
 	end,
 	map = function(this, map_func)
+		--[[
+			Converts a value received from the parent stream into a new
+			value, using the given function. Works almost identically to
+			map() from functional programming.
+		]]--
 		local child = EventStream.new():close_from(this)
 		this:on_value(function(value)
 			child:push(map_func(value))
@@ -68,6 +106,11 @@ Observable = class({
 		return child
 	end,
 	scan = function(this, seed, accumulate)
+		--[[
+			Creates a property that is updated whenever an event passes
+			through the parent stream. Similar to reduce() in functional
+			programming, but also passes intermediary values along.
+		]]--
 		local child = History.new(seed):close_from(this)
 		local store = seed
 		this:on_value(function(value)
@@ -76,7 +119,50 @@ Observable = class({
 		end)
 		return child
 	end,
+	group = function(this)
+		return this:scan({}, function(group, value)
+			_.push(group, value)
+			return group
+		end)
+	end,
+	front_window = function(this, head, tail, filter_smaller)
+		return this:group():filter(function(all)
+			head = head or 1
+			tail = tail or _.size(all)
+			assert(head <= tail, "Observable.front_window(): head="..head.." can't be greater than tail="..tail)
+			return not filter_smaller or (_.size(all) > tail)
+		end):map(function(all)
+			return _.slice(all, head, tail)
+		end)
+	end,
+	rear_window = function(this, head, tail, filter_smaller)
+		head = head or 1
+		tail = tail or 0
+		assert(head > tail, "Observable.rear_window(): head="..head.." can't be smaller than tail="..tail)
+		return this:group():filter(function(all) 
+			return not filter_smaller or (_.size(all) > head) 
+		end):map(function(all)
+			local head = head or 1
+			local tail = tail or 0
+			local length = _.size(all)
+			local slide_head = length - head
+			local slide_tail = length - tail
+			return _.slice(all, slide_head, slide_tail)
+		end)
+	end,
+	replace = function(this, set, unset)
+	end,
 	branch = function(this, select_branch, num_branches, prepare_branches)
+		--[[
+			Directs values to multiple different event streams depending
+			on an integer function. Use the "prepare_branches" function 
+			to perform operations on each branch after they've been set 
+			up.
+			select_branch: 
+				value(anything) -> number(preferably an integer)
+			prepare_branch: 
+				this(observable), branches(eventstream[]) -> eventstream
+		]]--
 		local branches = _.map(_.range(num_branches), function(key,value)
 			return EventStream.new():close_from(this)
 		end)
@@ -89,6 +175,18 @@ Observable = class({
 		return prepare_branches(this, branches)
 	end,
 	filter = function(this, test, prepare_pass_fail)
+		--[[
+			Directs values to two different event streams depending
+			on a boolean function. By default, the pass stream is 
+			returned just like in Bacon.js, but this can be changed. 
+			The "prepare_pass_fail" function initializes the pass and 
+			fail streams and determines which stream is used to continue 
+			the chain.
+			test:
+				value(anything) -> bool
+			prepare_pass_fail:
+				this, pass, fail -> observable
+		]]--
 		if (not _.isFunction(prepare_pass_fail)) then
 			prepare_pass_fail = function(this, pass, fail) 
 				return pass
@@ -104,9 +202,97 @@ Observable = class({
 			end
 		)
 	end,
+	skip_duplicates = function(this)
+		--[[
+			Skips events that have repeating messages.
+		]]--
+		return this:scan(nil, function(last,value)
+			local changed = (last ~= value)
+			return {changed = changed, value = value}
+		end):filter(function(tuple) return tuple.changed end)
+		:map(function(tuple) return tuple.value end)
+	end,
+	flatten = function(this)
+		--[[
+			Converts a stream of observables into a single observable
+			containing the results from each one received. Think of it
+			like how flatten works in Underscore or Moses: instead of
+			having an array of arrays, you have a single array with all
+			of the values. Note that flatten() listens to EVERY stream
+			provided by the base stream, so make sure to close streams
+			with obsolete data.
+		]]--
+		local output = EventStream.new():close_from(this)
+		local branch = this:scan({}, function(branches, stream)
+			if (stream) then
+				if (not branches[stream]) then
+					branches[stream] = stream:plug_to(output, true)
+					stream:on_final(function()
+						branches[stream] = nil
+					end)
+				end
+			end
+			return branches
+		end)
+		return output
+	end,
+	flatten_latest = function(this)
+		--[[
+			Converts a stream of observables into a single observable
+			containing the results from -only- the latest one received.
+			This is similar to changing the channel on your TV. Note 
+			that any events from streams not being listented to are 
+			IGNORED, so make sure you really only need the latest 
+			information; otherwise, use flatten() and filter the data 
+			yourself.
+		]]--
+		local output = EventStream.new():close_from(this)
+		local unplug = nil
+		local latest = this:scan(nil, function(latest, stream)
+			if (latest) then
+				--unsubscribe previous
+				unplug()
+			end
+			if (stream) then
+				--subscribe next
+				unplug = stream:plug_to(output, true)
+			end
+			return stream
+		end)
+		return output
+	end,
+	flatten_first = function(this)
+		--[[
+			Converts a stream of observables into a single observable,
+			switching automatically from one observable to the next as
+			each one closes. Note that any events from streams not being
+			listented to are IGNORED.
+		]]--
+		local output = EventStream.new():close_from(this)
+		local branch = this:scan({}, function(branches, stream)
+			if (stream) then
+				_.push(branches, stream)
+				stream:on_final(function(event)
+					branch:push(_.pull(branches, stream))
+				end)
+			end
+			return branches
+		end)
+		local current = branch:map(function(branches)
+			return _.first(branches,1)[1]
+		end):skip_duplicates():on_value(function(stream) 
+			stream:plug_to(output, true)
+		end)
+		return output
+	end,
 	flat_map = function(this, switch)
-		local output = EventStream.new()
-		
+		return this:map(switch):flatten()
+	end,
+	flat_map_latest = function(this, switch)
+		return this:map(switch):flatten_latest()
+	end,
+	flat_map_first = function(this, switch)
+		return this:map(switch):flatten_first()
 	end,
 	yield = function(this)
 		local child = EventStream.new():close_from (this)

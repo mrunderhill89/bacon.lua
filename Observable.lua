@@ -15,6 +15,15 @@ function virtual(name)
 	end
 end
 
+_.pairs = function(obj)
+	return _.map(obj, function(key,value)
+		return {
+			key=key,
+			value=value
+		}
+	end)
+end
+
 Observable = class({
 	subscribe = virtual("Observable.subscribe"),
 	sink = virtual("Observable.sink"),
@@ -112,23 +121,96 @@ Observable = class({
 			programming, but also passes intermediary values along.
 		]]--
 		local store = History.new(seed):close_from(this)
-		this:plug_to(store)
-		--[[
-		this:sample_to(store, function(value,store)
-			return accumulate(store,value)
+		this:sample_from(store, function(values)
+			return accumulate(values[2],values[1])
 		end):plug_to(store)
-		]]--
 		return store
 	end,
-	combine = function(this, that, combine)
+	combine = function(streams, hot, combine)
+		--[[
+			Core function for combining streams. Note that this
+			takes a TABLE of streams as its first argument, so you CANNOT use it
+			with "some_observable:combine()". Use "Observable.combine({some_observable,...})"
+			instead or use "combine_with."
+			streams - table containing all streams you want to combine.
+				keys are used to store resulting values.
+			hot - table of all streams that will trigger a new result
+				regardless of whether they've been listened to already.
+			combine - function that produces a result from a table of
+				values coming from each provided stream.
+		]]--
+		local result = EventStream.new()
+		local data = _.reduce(
+			_.pairs(streams),
+			function(data, kv)
+				local index = kv.key
+				local obs = kv.value
+				local is_hot = _.contains(hot,obs)
+				data.values[index] = nil
+				data.waiting[index] = true
+				data.remaining = data.remaining + 1
+				result:close_from(obs)
+				local unsub = obs:on_value(function(value)
+					data.values[index] = value
+					if (data.waiting[index]) then
+						data.remaining = data.remaining - 1
+					end
+					if (data.remaining == 0 and (is_hot or data.waiting[index])) then
+						data.waiting[index] = false
+						result:push(combine(data.values))
+					end
+					data.waiting[index] = false
+				end)
+				result:on_final(unsub)
+				return data
+			end,
+			{
+				values = {},
+				waiting = {},
+				remaining = 0
+			}
+		)
+		return result
+	end, 
+	combine_with = function(this, that, combine)
+		--[[
+			Simplified and inline version of "combine," similar to 
+			Bacon.js's version. New values are computed when EITHER stream
+			receives a new value.
+		]]--
+		return Observable.combine({this, that},{this,that},combine)
 	end,
 	sample_from = function(this, that, combine)
+		--[[
+			New values are computed when THIS stream receives a new value,
+			but not THAT stream.
+		]]--
+		return Observable.combine({this,that},{this},combine)
 	end,
 	sample_to = function(this,that,combine)
+		--[[
+			New values are computed when THAT stream receives a new value,
+			but not THIS stream. Similar to "SampledBy" in Bacon.js.
+		]]--
+		return Observable.combine({this,that},{that},combine)
 	end,
 	group = function(this)
+		--[[
+			Common scan function that simply pushes new values into an
+			array.
+		]]--
 		return this:scan({}, function(group, value)
 			_.push(group, value)
+			return group
+		end)
+	end,
+	group_kv = function(this)
+		--[[
+			Common scan function that sets the values of a table using
+			a key/value pair. Pushes the table after every change.
+		]]--
+		return this:scan({}, function(group, kv)
+			group[kv.key] = kv.value
 			return group
 		end)
 	end,
@@ -184,7 +266,7 @@ Observable = class({
 	end,
 	skip_duplicates = function(this)
 		--[[
-			Skips events that have repeating messages.
+			Skips events with repeating messages.
 		]]--
 		return this:scan(nil, function(last,value)
 			local changed = (last ~= value)

@@ -3,7 +3,7 @@ Observable = Observable or require("Observable")
 EventStream = EventStream or require("EventStream")
 History = History or require("History")
 
-local numbers = EventStream.new()
+local numbers = EventStream.new():log("Number")
 local sum = numbers:scan(0, function(s,n) return s+n end):log("Sum")
 _.eachi(_.range(10), function(value)
 	numbers:push(value)

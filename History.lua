@@ -15,7 +15,6 @@ function wrap_subscriber_multi(sub)
 				return event:message()
 			end
 		)
-		print(unpack(messages))
 		sub(unpack(messages))
 	end
 end
@@ -47,6 +46,16 @@ History = Observable:extend({
 	on_value = function(this,sub)
 		return this:subscribe(wrap_subscriber_multi(sub))
 	end,
+	on_final = function(this,sub)
+		return this:subscribe(function(events)
+			local final = _.filter(events, function(key,event)
+				return event:is_final()
+			end)[1]
+			if (not _.isNil(final)) then
+				sub(final)
+			end
+		end)
+	end,
 	maintain = function(this, set)
 		if (not _.isNumber(set)) then 
 			return this._maintain
@@ -55,7 +64,7 @@ History = Observable:extend({
 		return this
 	end,
 	subset_events = function(this)
-		local result = _.reduce(_.reverse(this.events), function(base, event)
+		local result = _.reduceRight(this.events, function(base, event)
 			if (event:is_final()) then
 				return {
 					using={},
@@ -75,7 +84,12 @@ History = Observable:extend({
 				errors={}
 			}
 		)
+		--Get the events in the right order again.
 		result.using = _.reverse(result.using)
+		--Add the final event if we have one
+		if (not _.isNil(result.final)) then
+			_.push(result.using, result.final)
+		end
 		return result
 	end,
 	observe = function(this)
@@ -104,7 +118,7 @@ History = Observable:extend({
 	end,
 	observe_single = function(this,sub)
 		local sub_events = this:subset_events()
-		if (_.size(sub_events.using) == this.maintain) then
+		if (_.size(sub_events.using) >= this:maintain()) then
 			local routine = coroutine.create(_.bind(sub,sub_events.using))
 			while (coroutine.status(routine) ~= "dead") do
 				coroutine.resume(routine)

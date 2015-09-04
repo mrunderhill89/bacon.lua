@@ -38,4 +38,12 @@ function table.tostring(t)
 	return "{\n"..text.."}"
 end
 
+function type_check(value,type_name, nil_okay)
+	return type(value) == type_name or (value == nil and nil_okay)
+end
+
+function assert_type(value, type_name, nil_okay)
+	assert(type_check(value,type_name,nil_okay), "Expected type "..type_name..". Got "..type(value).." "..tostring(value).." instead.")
+end
+
 return class

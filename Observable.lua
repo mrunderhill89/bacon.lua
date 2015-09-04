@@ -111,46 +111,26 @@ Observable = class({
 			through the parent stream. Similar to reduce() in functional
 			programming, but also passes intermediary values along.
 		]]--
-		local child = History.new(seed):close_from(this)
-		local store = seed
-		this:on_value(function(value)
-			store = accumulate(store, value)
-			child:push(store)
-		end)
-		return child
+		local store = History.new(seed):close_from(this)
+		this:plug_to(store)
+		--[[
+		this:sample_to(store, function(value,store)
+			return accumulate(store,value)
+		end):plug_to(store)
+		]]--
+		return store
+	end,
+	combine = function(this, that, combine)
+	end,
+	sample_from = function(this, that, combine)
+	end,
+	sample_to = function(this,that,combine)
 	end,
 	group = function(this)
 		return this:scan({}, function(group, value)
 			_.push(group, value)
 			return group
 		end)
-	end,
-	front_window = function(this, head, tail, filter_smaller)
-		return this:group():filter(function(all)
-			head = head or 1
-			tail = tail or _.size(all)
-			assert(head <= tail, "Observable.front_window(): head="..head.." can't be greater than tail="..tail)
-			return not filter_smaller or (_.size(all) > tail)
-		end):map(function(all)
-			return _.slice(all, head, tail)
-		end)
-	end,
-	rear_window = function(this, head, tail, filter_smaller)
-		head = head or 1
-		tail = tail or 0
-		assert(head > tail, "Observable.rear_window(): head="..head.." can't be smaller than tail="..tail)
-		return this:group():filter(function(all) 
-			return not filter_smaller or (_.size(all) > head) 
-		end):map(function(all)
-			local head = head or 1
-			local tail = tail or 0
-			local length = _.size(all)
-			local slide_head = length - head
-			local slide_tail = length - tail
-			return _.slice(all, slide_head, slide_tail)
-		end)
-	end,
-	replace = function(this, set, unset)
 	end,
 	branch = function(this, select_branch, num_branches, prepare_branches)
 		--[[

@@ -44,7 +44,7 @@ EventStream = Observable:extend({
 		end)
 	end,
 	to_history = function(this, initial)
-		return History:new(initial, this)
+		return History:new(initial):plug_from(this)
 	end
 })
 
